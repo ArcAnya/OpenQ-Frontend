@@ -25,8 +25,14 @@ export default function Index({orgs, fullBounties, batch }) {
 	// Context
 	const [appState] = useContext(StoreContext);
 
-	const {account} = useWeb3();
+	const {account, library} = useWeb3();
 	// Hooks
+
+	useEffect(async()=>{
+	
+		console.log(await appState.openQClient.allowance(library, '0x5FbDB2315678afecb367f032d93F642f64180aa3'));
+
+	},[library]);
 	useEffect(async()=>{
 		if(account){
 			try{
