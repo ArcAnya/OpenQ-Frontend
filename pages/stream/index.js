@@ -11,7 +11,7 @@ const stream = () => {
   };
 
   return (
-    <div className="flex flex-col items-center w-full">
+    <div className="flex flex-col font-mont justify-center items-center pt-7">
       <Toggle
         toggleFunc={handleToggle}
         toggleVal={internalMenu}

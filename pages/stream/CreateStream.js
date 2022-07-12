@@ -4,11 +4,47 @@ import useWeb3 from "../../hooks/useWeb3";
 import { ethers } from "ethers";
 import { Framework } from "@superfluid-finance/sdk-core";
 
+// IMPORTS AS IN FUNDPAGE
+
+import TokenFundBox from "../../components/FundBounty/SearchTokens/TokenFundBox";
+import ButtonLoadingIcon from '../../components/Loading/ButtonLoadingIcon';
+import ToolTip from "../../components/Utils/ToolTip";
+import ApproveFundModal from '../../components/FundBounty/ApproveFundModal';
+import {
+	RESTING,
+	CONFIRM,
+	APPROVING,
+	TRANSFERRING,
+	SUCCESS,
+	ERROR
+} from '../../components/FundBounty/ApproveTransferState';
+import useIsOnCorrectNetwork from '../../hooks/useIsOnCorrectNetwork';
+
 const CreateStream = () => {
+
+	const [volume, setVolume] = useState('');
+	const [receiverAddress, setReceiverAddress] = useState('');
+	const [error, setError] = useState('');
+	const [buttonText, setButtonText] = useState('Start Paying');
+	const [, setSuccessMessage] = useState('');
+	const [transactionHash, setTransactionHash] = useState(null);
+	const [confirmationMessage, setConfirmationMessage] = useState('Please enter a volume greater than 0.');
+	const [showApproveTransferModal, setShowApproveTransferModal] = useState(false);
+	const [approveTransferState, setApproveTransferState] = useState(RESTING);
+	const [isOnCorrectNetwork] = useIsOnCorrectNetwork();
+	const zeroAddressMetadata = {
+		name: 'Matic',
+		address: '0x0000000000000000000000000000000000000000',
+		symbol: 'MATIC',
+		decimals: 18,
+		chainId: 80001,
+		path: '/crypto-logos/MATIC.svg'
+	};
 
 	// CONTEXT
   const [appState] = useContext(StoreContext);
   const { activate, account, library } = useWeb3();
+	
 
   // STATE
   const [recipient, setRecipient] = useState("");
@@ -19,6 +55,16 @@ const CreateStream = () => {
 
   const fDaiXAddress = "0x5D8B4C2554aeB7e86F387B4d6c00Ac33499Ed01f";
   const fDaiAddress = "0x15F0Ca26781C3852f8166eD2ebce5D18265cceb7";
+
+	const [token, setToken] = useState(zeroAddressMetadata);
+
+	const loadingClosedOrZero = approveTransferState == CONFIRM || approveTransferState == APPROVING || approveTransferState == TRANSFERRING || parseFloat(volume) <= 0.00000001 || parseFloat(volume) >= 1000 || volume == '' ;
+	const disableOrEnable = `${(loadingClosedOrZero || !isOnCorrectNetwork) && account ? 'confirm-btn-disabled cursor-not-allowed' : 'confirm-btn cursor-pointer'}`;
+	const fundButtonClasses = `flex flex-row justify-center space-x-5 items-center py-3 text-lg  ${disableOrEnable}`;
+
+	function resetState() {
+		setApproveTransferState(RESTING);
+	}
 
   // HOOKS
   useEffect(() => {
@@ -187,8 +233,212 @@ const CreateStream = () => {
     setAmount(e.target.value);
   };
 
+	const openFund = () => {
+		setConfirmationMessage(
+			`You are about to fund this bounty at address ${bounty.bountyAddress.substring(
+				0,
+				12
+			)}...${bounty.bountyAddress.substring(32)} with ${volume} ${token.name
+			}.
+									
+									This will be not be refundable}.
+									
+									Is this correct?`
+		);
+		setApproveTransferState(CONFIRM);
+		setShowApproveTransferModal(true);
+	};
+
+	const connectWallet = () => {
+		const payload = {
+			type: 'CONNECT_WALLET',
+			payload: true
+		};
+		dispatch(payload);
+	};
+
+	async function fundBounty() {
+		const volumeInWei = volume * 10 ** token.decimals;
+
+		if (volumeInWei == 0) {
+			setError({ title: 'Zero Volume Sent', message: 'Must send a greater than 0 volume of tokens.' });
+			setApproveTransferState(ERROR);
+			setButtonText('Fund');
+			return;
+		}
+
+		const bigNumberVolumeInWei = ethers.BigNumber.from(volumeInWei.toString());
+
+		let approveSucceeded = false;
+
+		try {
+			const isWhitelisted = await appState.openQClient.isWhitelisted(library, token.address);
+
+			// Only check bounty token address limit for non-whitelisted tokens
+			if (!isWhitelisted) {
+				const tokenAddressLimitReached = await appState.openQClient.tokenAddressLimitReached(library, bounty.bountyId);
+				if (tokenAddressLimitReached) {
+					setError({ title: 'Token Address Limit Is Reached!', message: 'Contact info@openq.dev' });
+					setApproveTransferState(ERROR);
+					return;
+				}
+			}
+		} catch (error) {
+			console.error(error);
+			setError({ title: 'Call Revert Exception', message: 'A contract call exception occurred. Please try again.' });
+			setButtonText('Fund');
+			setApproveTransferState(ERROR);
+			return;
+		}
+
+		try {
+			const callerBalance = await appState.openQClient.balanceOf(library, account, ethers.utils.getAddress(token.address));
+			if (callerBalance.noSigner) {
+				setError({ title: 'No wallet connected.', message: 'Please connect your wallet.' });
+				setApproveTransferState(ERROR);
+				return;
+			} else if (callerBalance.lt(bigNumberVolumeInWei)) {
+				setError({ title: 'Funds Too Low', message: 'You do not have sufficient funds for this payment' });
+				setApproveTransferState(ERROR);
+				return;
+			}
+		} catch (error) {
+			console.log(error);
+			setError({ title: 'Call Revert Exception', message: 'A contract call exception occurred. Please try again.' });
+			setButtonText('Fund');
+			setApproveTransferState(ERROR);
+			return;
+		}
+
+		try {
+			setShowApproveTransferModal(true);
+			if (token.address != ethers.constants.AddressZero) {
+				setButtonText('Approving');
+				setApproveTransferState(APPROVING);
+				await appState.openQClient.approve(
+					library,
+					bounty.bountyAddress,
+					token.address,
+					bigNumberVolumeInWei
+				);
+			}
+			approveSucceeded = true;
+		} catch (error) {
+			console.log(error);
+			const { message, title, link, linkText } = appState.openQClient.handleError(error, { bounty });
+			setError({ message, title, link, linkText });
+			setButtonText('Fund');
+			setApproveTransferState(ERROR);
+		}
+
+		if (approveSucceeded) {
+			setApproveTransferState(TRANSFERRING);
+			try {
+				const fundTxnReceipt = await appState.openQClient.fundBounty(
+					library,
+					bounty.bountyId,
+					token.address,
+					bigNumberVolumeInWei
+				);
+				setTransactionHash(fundTxnReceipt.events[0].transactionHash);
+				setApproveTransferState(SUCCESS);
+				setSuccessMessage(
+					`Successfully funded issue ${bounty.url} with ${volume} ${token.symbol}!`
+				);
+				refreshBounty();
+			} catch (error) {
+				console.log(error);
+				const { message, title } = appState.openQClient.handleError(error, { bounty });
+				setError({ message, title });
+				setApproveTransferState(ERROR);
+			}
+			setButtonText('Fund');
+		}
+	}
+
+	function onCurrencySelect(token) {
+		setToken({ ...token, address: ethers.utils.getAddress(token.address) });
+	}
+
+	function onVolumeChange(volume) {
+		const numberRegex = /^(\d+)?(\.)?(\d+)?$/;
+		if (numberRegex.test(volume) || volume === '' || volume === '.') {
+			setVolume(volume.match(numberRegex)[0]);
+		}
+	}
+
   return (
-    <div>
+		<>
+			<div className="flex flex-1 font-mont justify-center items-center pb-10">
+				<div className="flex flex-col space-y-5 w-5/6">
+					<div className="flex text-3xl font-semibold  justify-center pt-16">
+						Start Streaming Your Payment
+					</div>
+	
+					<TokenFundBox
+						onCurrencySelect={onCurrencySelect}
+						onVolumeChange={onVolumeChange}
+						token={token}
+						volume={volume}
+					/>
+	
+					<div className="flex w-full flex-row justify-between items-center px-4 py-3 rounded-lg py-1 bg-dark-mode border border-web-gray ">
+						<div className={'flex w-full px-4 font-bold fundBox-amount bg-dark-mode'}>
+							<input
+								className="w-full bg-dark-mode px-5 m-1.5 p-1 border-web-gray outline-none"
+								autoComplete="off"
+								value={receiverAddress}
+								type="text"
+								onChange={(event) => {
+									setReceiverAddress(event.target.value);
+								}}
+								placeholder="Enter Wallet Address"
+							/>
+						</div>
+					</div>
+	
+					<ToolTip hideToolTip={account && isOnCorrectNetwork && !loadingClosedOrZero}
+						toolTipText={
+							account && isOnCorrectNetwork ?
+								'Please indicate how many days you\'d like to fund your bounty for.' :
+								account && isOnCorrectNetwork ?
+									'Please indicate the volume you\'d like to fund with. Must be between 0.0000001 and 1000.' :
+									account ?
+										'Please switch to the correct network to fund this bounty.' :
+										'Connect your wallet to fund this bounty!'}
+						customOffsets={
+							[0, 54]}>
+						<button
+							className={fundButtonClasses}
+							disabled={(loadingClosedOrZero || !isOnCorrectNetwork) && account}
+							type="button"
+							onClick={account ? openFund : connectWallet}
+						>
+							<div>{account ? buttonText : 'Connect Wallet'}</div>
+							<div>{approveTransferState != RESTING && approveTransferState != SUCCESS && approveTransferState != ERROR ? (
+								<ButtonLoadingIcon />
+							) : null}</div>
+						</button>
+					</ToolTip>
+					<div className='text-web-gray text-sm'>Always pay through the interface! Never send funds directly to the address!</div>
+				</div>
+	
+				{showApproveTransferModal && <ApproveFundModal
+					approveTransferState={approveTransferState}
+					address={account}
+					transactionHash={transactionHash}
+					confirmationMessage={confirmationMessage}
+					error={error}
+					setShowApproveTransferModal={setShowApproveTransferModal}
+					confirmMethod={fundBounty}
+					resetState={resetState}
+					token={token}
+					volume={volume}
+					bountyAddress={bounty.bountyAddress}
+					bounty={bounty}
+				/>}
+			</div>
+    {/* <div>
       <div className="ml-12 mt-8">
         <h2 className="mb-5 text-2xl">Approve Tokens</h2>
         <form>
@@ -339,7 +589,8 @@ const CreateStream = () => {
           </CreateButton>
         </form>
       </div>
-    </div>
+    </div> */}
+		</>
   );
 };
 
