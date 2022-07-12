@@ -14,11 +14,15 @@ const BountyLinks = ({ bounty, hideBountyLink, bountyAddress }) => {
 	const { account } = useWeb3();
 	const [watchDisabled, setWatchDisabled] = useState();
 	const [watchingDisplay, setWatchingDisplay] = useState();
+	const [signing, setSigning] = useState();
 	const [appState, dispatch] = useContext(StoreContext);
 
 	useEffect(() => {
 		const watching = bounty?.watchingUserIds?.some(user => user === account);
 		setWatchingDisplay(watching);
+		if(signing){
+			watchBounty();
+		}
 	}, [account]);
 
 	const signMessage = async () => {
@@ -32,39 +36,50 @@ const BountyLinks = ({ bounty, hideBountyLink, bountyAddress }) => {
 	};
 
 	const watchBounty = async () => {
-		try {
-			const response = await axios.get(`${process.env.NEXT_PUBLIC_AUTH_URL}/hasSignature?address=${account}`, { withCredentials: true });
-			console.log(response);
-			if (response.data.status===false) {
-				const signature = await signMessage();
-				await axios.post(`${process.env.NEXT_PUBLIC_AUTH_URL}/verifySignature`,
-					{
-						signature,
-						address: account
-					}, { withCredentials: true }
-				);
+		if(account){
+			try {
+				const response = await axios.get(`${process.env.NEXT_PUBLIC_AUTH_URL}/hasSignature?address=${account}`, { withCredentials: true });
+				console.log(response);
+				if (response.data.status===false) {
+					const signature = await signMessage();
+					await axios.post(`${process.env.NEXT_PUBLIC_AUTH_URL}/verifySignature`,
+						{
+							signature,
+							address: account
+						}, { withCredentials: true }
+					);
+				}
+
+
+				setWatchDisabled(true);
+				if (watchingDisplay) {
+					await appState.openQPrismaClient.unWatchBounty(ethers.utils.getAddress(bountyAddress), account);
+					setWatchingDisplay(false);
+					setWatchDisabled(false);
+				} else {
+					await appState.openQPrismaClient.watchBounty(ethers.utils.getAddress(bountyAddress), account);
+					setWatchingDisplay(true);
+					setWatchDisabled(false);
+				}
+
+				const payload = {
+					type: 'UPDATE_RELOAD',
+					payload: true
+				};
+
+				dispatch(payload);
+			} catch (error) {
+				console.error(error);
 			}
-
-
-			setWatchDisabled(true);
-			if (watchingDisplay) {
-				await appState.openQPrismaClient.unWatchBounty(ethers.utils.getAddress(bountyAddress), account);
-				setWatchingDisplay(false);
-				setWatchDisabled(false);
-			} else {
-				await appState.openQPrismaClient.watchBounty(ethers.utils.getAddress(bountyAddress), account);
-				setWatchingDisplay(true);
-				setWatchDisabled(false);
-			}
-
+			setSigning();
+		}
+		else{
 			const payload = {
-				type: 'UPDATE_RELOAD',
+				type: 'CONNECT_WALLET',
 				payload: true
 			};
-
 			dispatch(payload);
-		} catch (error) {
-			console.error(error);
+			setSigning(true);
 		}
 	};
 
@@ -133,7 +148,7 @@ const BountyLinks = ({ bounty, hideBountyLink, bountyAddress }) => {
 				</a>
 			</Link> :
 				<Skeleton width={'24px'} height={'24px'} />}
-			{bountyAddress && account ?
+			{bountyAddress ?
 
 				<button onClick={watchBounty} disabled={watchDisabled}>
 					<div id={'bounty-link'} className="cursor-pointer">
