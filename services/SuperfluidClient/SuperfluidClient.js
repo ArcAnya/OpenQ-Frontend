@@ -1,0 +1,215 @@
+import { Framework } from '@superfluid-finance/sdk-core';
+import { ethers } from 'ethers';
+import {HttpLink, ApolloClient, InMemoryCache} from '@apollo/client';
+import { GET_STREAMS_BY_ACCOUNT} from './graphql/query.js';
+
+/* Note:
+	const usdc = usdcx.underlyingToken.contract.connet(library.getSigner());
+	const totalSupply = await usdc.totalSupply();
+
+	this way you can access the underlaying token of some superToken
+	and send transactions
+*/
+
+class SuperfluidClient {
+
+	constructor() { }
+
+	/**
+	 * We do not have the Web3 library available on the construction of SuperfluidClient in InitialState, so we must create it
+	 * via a setter
+	 */
+
+	httpLink = new HttpLink({ uri: 'https://api.thegraph.com/subgraphs/name/superfluid-finance/protocol-v1-mumbai/graphql', fetch });
+
+	client = new ApolloClient({
+		uri: 'https://api.thegraph.com/subgraphs/name/superfluid-finance/protocol-v1-mumbai/graphql',
+
+		link: this.httpLink,
+		cache: new InMemoryCache(),
+	});
+
+	async createInstance(library) {
+		try {
+			if (!this.instance) {
+				const tempInstance = await Framework.create({
+					//networkName: "matic",
+					chainId: 80001,
+					provider: library,
+				});
+				this.instance = tempInstance;
+				return tempInstance;
+			}
+			return this.instance;
+		} catch (err) {
+			console.log(err);
+			console.log(library);
+		}
+	}
+
+	async createSigner(library) {
+		if (!this.signer) {
+			const instance = await this.createInstance(library);
+			const tempSigner = instance.createSigner({ web3Provider: library });
+			this.signer = tempSigner;
+		}
+		return this.signer;
+	}
+
+	// UPGRADE + CREATE STREAM
+	async upgradeToken(library, adddress, amount) {
+		const superToken = await this.loadSuperToken(library, adddress);
+		const upgradeOp = superToken.upgrade({
+			amount: amount.toString(),
+		});
+		return upgradeOp;
+	}
+
+	async superTokenCreateFlow(library, adddress, sender, receiver, flowRate) {
+		const superToken = await this.loadSuperToken(library, adddress);
+		const createFlowOp = superToken.createFlow({
+			sender,
+			receiver,
+			flowRate,
+		});
+		return createFlowOp;
+	}
+
+	async upgradeAndCreateFlowBacth(library, adddress, amount, sender, receiver) {
+		const instance = await this.createInstance(library);
+		const signer = await this.createSigner(library);
+		const upgradeOp = await this.upgradeToken(
+			library,
+			adddress,
+			ethers.utils.parseEther(amount.toString())
+		);
+		const createFlowOp = await this.superTokenCreateFlow(
+			library,
+			adddress,
+			sender,
+			receiver,
+			this.calculateFlowRate(amount),
+		);
+
+		return await instance.batchCall([
+			upgradeOp,
+			createFlowOp
+		]).exec(signer);
+	}
+
+	async updateFlow(library, sender, receiver, flowRate, address) {
+		const instance = await this.createInstance(library);
+		const signer = await this.createSigner(library);
+		const updateFlowOp = instance.cfaV1.updateFlow({
+			superToken: address,
+			sender,
+			receiver,
+			flowRate: this.calculateFlowRate(flowRate),
+		});
+		return await updateFlowOp.exec(signer);
+	}
+
+	/**
+	 * 
+	 * @param {Web3 Provider} library 
+	 * @param {*} amount 
+	 * @param {*} address 
+	 * @returns 
+	 * @description Downgrading is essentially the equivalent of withdrawing from the stream
+	 */
+	async downgradeToken(library, amount, address) {
+		const superToken = this.loadSuperToken(library, adddress);
+		const upgradeOp = superToken.downgrade({
+			amount: amount.toString(),
+		});
+		return await upgradeOp.exec(signer);
+	}
+
+	async deleteFlow(library, sender, receiver, address) {
+		const instance = await this.createInstance(library);
+		const signer = await this.createSigner(library);
+		const deleteFlowOp = instance.cfaV1.deleteFlow({
+			superToken: address,
+			sender,
+			receiver,
+		});
+		return await deleteFlowOp.exec(signer);
+	}
+
+	// UTILS
+	async loadSuperToken(library, address) {
+		const instance = await this.createInstance(library);
+		const token = await instance.loadSuperToken(address);
+		return token;
+	}
+
+	async getFlow(library, sender, receiver, address) {
+		const instance = await this.createInstance(library);
+		return instance.cfaV1.getFlow({
+			superToken: address,
+			sender,
+			receiver,
+		});
+	}
+
+	async getAccountFlowInfo(library, account, address) {
+		const instance = await this.createInstance(library);
+		return instance.cfaV1.getAccountFlowInfo({
+			superToken: address,
+			account,
+		});
+	}
+	async getNetFlow(library, account, address) {
+		const instance = await this.createInstance(library);
+		return instance.cfaV1.getNetFlow({
+			superToken: address,
+			account,
+		});
+	}
+
+	async balanceOf(library, account, address) {
+		const superToken = this.loadSuperToken(library, adddress);
+		return await superToken.balanceOf({ account });
+	}
+
+	async allowance(library, account, spender, adddress) {
+		const superToken = this.loadSuperToken(library, adddress);
+		return await superToken.allowance({
+			account,
+			spender,
+		});
+	}
+
+	async realtimeBalanceOf(library, account, timestamp, adddress) {
+		const superToken = this.loadSuperToken(library, adddress);
+		return await superToken.realtimeBalanceOf({
+			account,
+			timestamp,
+		});
+	}
+
+	calculateFlowRate(amount) {
+		const monthlyAmount = ethers.utils.parseEther(amount.toString());
+		const calculatedFlowRate = monthlyAmount.div(
+			ethers.utils.formatUnits(60 * 60 * 24 * 30, 0)
+		);
+		return calculatedFlowRate.toString();
+	}
+
+	viewAccount(account){
+		const promise = new Promise(async(resolve, reject)=>{
+			try{
+				const result = await this.client.query({
+					query: GET_STREAMS_BY_ACCOUNT, 
+				});
+				resolve(result);
+			}
+			catch(err){
+				reject(err);
+			}
+		});
+		return promise;
+	}
+}
+
+export default SuperfluidClient;
