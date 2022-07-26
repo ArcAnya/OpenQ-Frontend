@@ -122,7 +122,7 @@ const ClaimLoadingModal = ({ confirmMethod, url, ensName, account, claimState, a
 											confirmMethod();
 										}}
 									>
-										Yes! Claim!
+										Yes! Claim! Yes!
 									</button>
 								</div>
 							</div>
